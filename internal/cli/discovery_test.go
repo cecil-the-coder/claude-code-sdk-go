@@ -537,14 +537,26 @@ func TestFindCLISuccess(t *testing.T) {
 func TestFindCLINodeJSValidation(t *testing.T) {
 	// Test when Node.js is not available
 	t.Run("nodejs_not_found", func(t *testing.T) {
-		// Isolate environment
+		// Create temporary directory for isolated HOME
+		tempDir := t.TempDir()
+
+		// Isolate environment - set both PATH and HOME to prevent finding CLI
 		originalPath := os.Getenv("PATH")
+		originalHome := os.Getenv("HOME")
+
 		if err := os.Setenv("PATH", "/nonexistent/path"); err != nil {
 			t.Fatalf("Failed to set PATH: %v", err)
 		}
+		if err := os.Setenv("HOME", tempDir); err != nil {
+			t.Fatalf("Failed to set HOME: %v", err)
+		}
+
 		defer func() {
 			if err := os.Setenv("PATH", originalPath); err != nil {
 				t.Logf("Failed to restore PATH: %v", err)
+			}
+			if err := os.Setenv("HOME", originalHome); err != nil {
+				t.Logf("Failed to restore HOME: %v", err)
 			}
 		}()
 
