@@ -1208,3 +1208,341 @@ func assertEnvContains(t *testing.T, env []string, expected string) {
 func stringPtr(s string) *string {
 	return &s
 }
+
+// TestTransportResultMessageChannelClosure tests the critical fix for ResultMessage-driven channel closure
+func TestTransportResultMessageChannelClosure(t *testing.T) {
+	ctx, cancel := setupTransportTestContext(t, 10*time.Second)
+	defer cancel()
+
+	tests := []struct {
+		name           string
+		scriptTemplate string
+		expectClosure  bool
+	}{
+		{
+			name: "response_with_result_message_closes_channel",
+			scriptTemplate: `#!/bin/bash
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Hello"}],"model":"claude-3"}}'
+echo '{"type":"result","subtype":"final","duration_ms":1000,"duration_api_ms":800,"is_error":false,"num_turns":1,"session_id":"test-123","result":{"output":"response"}}'
+# Keep process alive to simulate streaming mode
+sleep 2
+`,
+			expectClosure: true,
+		},
+		{
+			name: "tool_uses_with_result_message_closes_channel",
+			scriptTemplate: `#!/bin/bash
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"I will list files"}],"model":"claude-3"}}'
+echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool-1","name":"bash","input":{"command":"ls"}}],"model":"claude-3"}}'
+echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool-1","content":"file1.txt\nfile2.txt"}]}}'
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Here are the files"}],"model":"claude-3"}}'
+echo '{"type":"result","subtype":"final","duration_ms":2000,"duration_api_ms":1500,"is_error":false,"num_turns":2,"session_id":"test-456","result":{"output":"complete"}}'
+# Keep process alive to simulate streaming mode
+sleep 2
+`,
+			expectClosure: true,
+		},
+		{
+			name: "no_result_message_no_closure",
+			scriptTemplate: `#!/bin/bash
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Incomplete response"}],"model":"claude-3"}}'
+sleep 8
+# No ResultMessage - should not close for streaming mode
+`,
+			expectClosure: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cliScript := createTransportTempScript(test.scriptTemplate, "")
+			transport := setupTransportForTest(t, cliScript)
+			defer disconnectTransportSafely(t, transport)
+
+			connectTransportSafely(ctx, t, transport)
+
+			// Send a message to trigger response
+			message := shared.StreamMessage{
+				Type:      "user",
+				SessionID: "test-session",
+				Message:   "test message",
+			}
+			err := transport.SendMessage(ctx, message)
+			assertNoTransportError(t, err)
+
+			// Get channels and monitor behavior
+			msgChan, errChan := transport.ReceiveMessages(ctx)
+
+			messageCount := 0
+			resultMessageReceived := false
+			channelClosed := false
+
+			// Wait for either channel closure or timeout
+			timeout := time.After(5 * time.Second)
+
+			for {
+				select {
+				case msg, ok := <-msgChan:
+					if !ok {
+						channelClosed = true
+						goto ChannelEvaluation
+					}
+					messageCount++
+
+					// Check if this is a ResultMessage
+					if _, isResult := msg.(*shared.ResultMessage); isResult {
+						resultMessageReceived = true
+					}
+
+				case err, ok := <-errChan:
+					if !ok {
+						// Error channel closed without errors - continue monitoring msgChan
+						continue
+					}
+					t.Errorf("Unexpected error on error channel: %v", err)
+					return
+
+				case <-timeout:
+					goto ChannelEvaluation
+				}
+			}
+
+		ChannelEvaluation:
+			if test.expectClosure {
+				if !channelClosed {
+					t.Errorf("Expected channel to close after ResultMessage, but it remained open")
+					t.Errorf("Messages received: %d, ResultMessage received: %v", messageCount, resultMessageReceived)
+				}
+				if !resultMessageReceived {
+					t.Errorf("Expected ResultMessage to be received before channel closure")
+				}
+			} else {
+				if channelClosed && messageCount > 0 {
+					t.Errorf("Expected channel to remain open without ResultMessage, but it closed")
+				}
+			}
+
+			// Verify stream validator state
+			validator := transport.GetValidator()
+			stats := validator.GetStats()
+			if test.expectClosure && stats.HasResult != resultMessageReceived {
+				t.Errorf("Validator stats inconsistent: HasResult=%v, resultMessageReceived=%v", stats.HasResult, resultMessageReceived)
+			}
+		})
+	}
+}
+
+// TestTransportGoroutineLeakPrevention tests that the fix prevents goroutine leaks
+func TestTransportGoroutineLeakPrevention(t *testing.T) {
+	ctx, cancel := setupTransportTestContext(t, 10*time.Second)
+	defer cancel()
+
+	// Count goroutines before test
+	initialGoroutines := runtime.NumGoroutine()
+
+	cliScript := newTransportMockCLI()
+	transport := setupTransportForTest(t, cliScript)
+
+	connectTransportSafely(ctx, t, transport)
+
+	// Send message and receive response
+	message := shared.StreamMessage{
+		Type:      "user",
+		SessionID: "leak-test",
+		Message:   "test for goroutine leaks",
+	}
+	err := transport.SendMessage(ctx, message)
+	assertNoTransportError(t, err)
+
+	// Wait for completion with timeout
+	msgChan, _ := transport.ReceiveMessages(ctx)
+	completed := false
+
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case _, ok := <-msgChan:
+			if !ok {
+				completed = true
+				break
+			}
+			// Track messages but don't block
+		case <-timeout:
+			break
+		}
+		if completed {
+			break
+		}
+	}
+
+	// Close transport
+	disconnectTransportSafely(t, transport)
+
+	// Give a moment for goroutines to cleanup
+	time.Sleep(100 * time.Millisecond)
+
+	finalGoroutines := runtime.NumGoroutine()
+	goroutineIncrease := finalGoroutines - initialGoroutines
+
+	// Allow for minimal goroutine variance due to test infrastructure
+	if goroutineIncrease > 2 {
+		t.Errorf("Potential goroutine leak detected. Goroutines increased by %d (from %d to %d)",
+			goroutineIncrease, initialGoroutines, finalGoroutines)
+	}
+}
+
+// TestTransportMultipleResultMessages tests behavior with multiple ResultMessages
+func TestTransportMultipleResultMessages(t *testing.T) {
+	ctx, cancel := setupTransportTestContext(t, 5*time.Second)
+	defer cancel()
+
+	// Script that sends multiple ResultMessages
+	cliScript := createTransportTempScript(`#!/bin/bash
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"First response"}],"model":"claude-3"}}'
+echo '{"type":"result","subtype":"final","duration_ms":500,"duration_api_ms":400,"is_error":false,"num_turns":1,"session_id":"multi-1","result":{"output":"first"}}'
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Second response"}],"model":"claude-3"}}'
+echo '{"type":"result","subtype":"final","duration_ms":600,"duration_api_ms":500,"is_error":false,"num_turns":1,"session_id":"multi-2","result":{"output":"second"}}'
+sleep 1
+`, "")
+
+	transport := setupTransportForTest(t, cliScript)
+	defer disconnectTransportSafely(t, transport)
+
+	connectTransportSafely(ctx, t, transport)
+
+	message := shared.StreamMessage{
+		Type:      "user",
+		SessionID: "multi-test",
+		Message:   "test multiple results",
+	}
+	err := transport.SendMessage(ctx, message)
+	assertNoTransportError(t, err)
+
+	msgChan, _ := transport.ReceiveMessages(ctx)
+
+	resultCount := 0
+	messagesReceived := 0
+	channelClosed := false
+
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case msg, ok := <-msgChan:
+			if !ok {
+				channelClosed = true
+				break
+			}
+			messagesReceived++
+			if _, isResult := msg.(*shared.ResultMessage); isResult {
+				resultCount++
+			}
+
+		case <-timeout:
+			break
+		}
+		if channelClosed {
+			break
+		}
+	}
+
+	if !channelClosed {
+		t.Error("Expected channel to close after first ResultMessage")
+	}
+
+	if resultCount == 0 {
+		t.Error("Expected at least one ResultMessage to be received")
+	}
+
+	// Channel should close after first ResultMessage, subsequent messages should not be processed
+	t.Logf("Messages received: %d, ResultMessages: %d, Channel closed: %v", messagesReceived, resultCount, channelClosed)
+}
+
+// TestTransportResultMessageWithErrors tests ResultMessage handling in error scenarios
+func TestTransportResultMessageWithErrors(t *testing.T) {
+	ctx, cancel := setupTransportTestContext(t, 5*time.Second)
+	defer cancel()
+
+	tests := []struct {
+		name          string
+		scriptContent string
+		expectError   bool
+		expectClosure bool
+	}{
+		{
+			name: "error_result_message_closes_channel",
+			scriptContent: `#!/bin/bash
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Processing"}],"model":"claude-3"}}'
+echo '{"type":"result","subtype":"final","duration_ms":200,"duration_api_ms":180,"is_error":true,"num_turns":1,"session_id":"error-1","result":{"error":"Something went wrong"}}'
+sleep 1
+`,
+			expectError:   false, // Error results are still valid completion signals
+			expectClosure: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cliScript := createTransportTempScript(test.scriptContent, "")
+			transport := setupTransportForTest(t, cliScript)
+			defer disconnectTransportSafely(t, transport)
+
+			connectTransportSafely(ctx, t, transport)
+
+			message := shared.StreamMessage{
+				Type:      "user",
+				SessionID: "error-test",
+				Message:   "test error handling",
+			}
+			err := transport.SendMessage(ctx, message)
+			assertNoTransportError(t, err)
+
+			msgChan, errChan := transport.ReceiveMessages(ctx)
+
+			errorReceived := false
+			resultReceived := false
+			channelClosed := false
+
+			timeout := time.After(4 * time.Second)
+			for {
+				select {
+				case msg, ok := <-msgChan:
+					if !ok {
+						channelClosed = true
+						break
+					}
+					t.Logf("Received message of type %T", msg)
+					if _, isResult := msg.(*shared.ResultMessage); isResult {
+						resultReceived = true
+						t.Log("ResultMessage received")
+					}
+
+				case err := <-errChan:
+					if err != nil {
+						t.Logf("Received error: %v", err)
+						errorReceived = true
+					}
+
+				case <-timeout:
+					t.Log("Timeout reached")
+					break
+				}
+				if channelClosed {
+					break
+				}
+			}
+
+			if test.expectError && !errorReceived {
+				t.Errorf("Expected error but none was received")
+			}
+
+			if test.expectClosure {
+				if !channelClosed {
+					t.Errorf("Expected channel closure but it remained open")
+				}
+				if !resultReceived {
+					t.Errorf("Expected ResultMessage to be received for closure")
+				}
+			}
+		})
+	}
+}
