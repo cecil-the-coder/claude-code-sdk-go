@@ -25,13 +25,16 @@ func main() {
 		}
 
 		// Stream messages in real-time
+		// ReceiveMessages() returns a channel that closes automatically when
+		// Claude's response completes (detected by ResultMessage)
 		msgChan := client.ReceiveMessages(ctx)
 		for {
 			select {
 			case message := <-msgChan:
 				if message == nil {
+					// Channel closed - this now works correctly after the fix!
+					fmt.Println("\n\n✓ Channel closed automatically")
 					return nil // Stream ended
-				}
 
 				switch msg := message.(type) {
 				case *claudecode.AssistantMessage:
