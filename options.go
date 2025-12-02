@@ -109,6 +109,13 @@ func WithResume(sessionID string) Option {
 	}
 }
 
+// WithSessionID sets the session ID for conversation isolation.
+func WithSessionID(sessionID string) Option {
+	return func(o *Options) {
+		o.SessionID = &sessionID
+	}
+}
+
 // WithCwd sets the working directory.
 func WithCwd(cwd string) Option {
 	return func(o *Options) {
@@ -149,6 +156,54 @@ func WithExtraArgs(args map[string]*string) Option {
 	return func(o *Options) {
 		o.ExtraArgs = args
 	}
+}
+
+// WithExtraFlag adds a boolean flag to ExtraArgs.
+// This is a convenience helper for adding flags without values (nil value).
+// Example: WithExtraFlag("fork-session") instead of manually creating map[string]*string{"fork-session": nil}
+func WithExtraFlag(name string) Option {
+	return func(o *Options) {
+		if o.ExtraArgs == nil {
+			o.ExtraArgs = make(map[string]*string)
+		}
+		o.ExtraArgs[name] = nil
+	}
+}
+
+// WithExtraArg adds a flag with a value to ExtraArgs.
+// This is a convenience helper for adding flags with values.
+// Example: WithExtraArg("setting", "value") instead of manually creating map[string]*string with pointer.
+func WithExtraArg(name, value string) Option {
+	return func(o *Options) {
+		if o.ExtraArgs == nil {
+			o.ExtraArgs = make(map[string]*string)
+		}
+		valueCopy := value
+		o.ExtraArgs[name] = &valueCopy
+	}
+}
+
+// WithForkSession enables fork-session mode when resuming a conversation.
+// Creates a new session ID while preserving the conversation history from the resumed session.
+// This allows branching conversations to explore different paths while maintaining the original context.
+//
+// Must be used with WithResume() to specify which session to fork from.
+//
+// Use cases:
+//   - Exploring alternative approaches without affecting the original conversation
+//   - Creating "what-if" scenarios from a specific conversation state
+//   - Parallel experimentation with different prompts from the same starting point
+//   - Recovery scenarios where you want to retry from a known good state
+//
+// Example:
+//
+//	// Fork from an existing session to explore an alternative approach
+//	err := claudecode.WithClient(ctx, func(client claudecode.Client) error {
+//	    return client.Query(ctx, "Let's try a different approach")
+//	}, claudecode.WithResume(originalSessionID),
+//	   claudecode.WithForkSession())
+func WithForkSession() Option {
+	return WithExtraFlag("fork-session")
 }
 
 // WithCLIPath sets a custom CLI path.
