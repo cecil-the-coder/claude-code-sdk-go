@@ -418,6 +418,100 @@ func TestClientReceiveMessages(t *testing.T) {
 	}
 }
 
+// TestClientReceiveMessagesWithErrors tests the new method that exposes both message and error channels
+// This addresses issue goagent-13o where transport errors were being silently lost
+func TestClientReceiveMessagesWithErrors(t *testing.T) {
+	ctx, cancel := setupClientTestContext(t, 10*time.Second)
+	defer cancel()
+
+	t.Run("receive_messages_and_errors", func(t *testing.T) {
+		transport := newClientMockTransport()
+		client := setupClientForTest(t, transport)
+		defer disconnectClientSafely(t, client)
+
+		connectClientSafely(ctx, t, client)
+
+		// Get both message and error channels
+		msgChan, errChan := client.ReceiveMessagesWithErrors(ctx)
+		if msgChan == nil {
+			t.Fatal("Expected message channel, got nil")
+		}
+		if errChan == nil {
+			t.Fatal("Expected error channel, got nil")
+		}
+
+		// Test receiving a message
+		testMessage := &AssistantMessage{
+			Content: []ContentBlock{&TextBlock{Text: "Test response"}},
+			Model:   "claude-3-5-sonnet-20241022",
+		}
+		transport.injectTestMessage(testMessage)
+
+		select {
+		case msg := <-msgChan:
+			if msg == nil {
+				t.Error("Received nil message")
+				return
+			}
+			assistantMsg, ok := msg.(*AssistantMessage)
+			if !ok {
+				t.Errorf("Expected AssistantMessage, got %T", msg)
+				return
+			}
+			textBlock := assistantMsg.Content[0].(*TextBlock)
+			if textBlock.Text != "Test response" {
+				t.Errorf("Expected 'Test response', got '%s'", textBlock.Text)
+			}
+		case <-time.After(1 * time.Second):
+			t.Error("Timeout waiting for message")
+		}
+
+		// Test receiving an error
+		expectedErr := errors.New("transport error: connection lost")
+		transport.injectTestError(expectedErr)
+
+		select {
+		case err := <-errChan:
+			if err == nil {
+				t.Error("Expected error, got nil")
+				return
+			}
+			if err.Error() != expectedErr.Error() {
+				t.Errorf("Expected error '%v', got '%v'", expectedErr, err)
+			}
+		case <-time.After(1 * time.Second):
+			t.Error("Timeout waiting for error")
+		}
+	})
+
+	t.Run("disconnected_client_returns_closed_channels", func(t *testing.T) {
+		disconnectedClient := setupClientForTest(t, newClientMockTransport())
+		defer disconnectClientSafely(t, disconnectedClient)
+		// Don't connect - test behavior when not connected
+
+		msgChan, errChan := disconnectedClient.ReceiveMessagesWithErrors(ctx)
+
+		// Both channels should be closed immediately
+		select {
+		case msg, ok := <-msgChan:
+			if ok {
+				t.Errorf("Expected closed message channel, but received: %v", msg)
+			}
+		case <-time.After(50 * time.Millisecond):
+			t.Error("Expected immediate closed message channel")
+		}
+
+		select {
+		case err, ok := <-errChan:
+			if ok {
+				t.Errorf("Expected closed error channel, but received: %v", err)
+			}
+		case <-time.After(50 * time.Millisecond):
+			t.Error("Expected immediate closed error channel")
+		}
+	})
+}
+
 // TestClientResponseIterator tests response iteration through MessageIterator
 // Covers T138: Client Response Iterator
 func TestClientResponseIterator(t *testing.T) {
@@ -1137,6 +1231,18 @@ func (c *clientMockTransport) injectTestMessage(msg Message) {
 	if c.msgChan != nil {
 		select {
 		case c.msgChan <- msg:
+		default:
+		}
+	}
+}
+
+// Error injection helper for testing error channel
+func (c *clientMockTransport) injectTestError(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.errChan != nil {
+		select {
+		case c.errChan <- err:
 		default:
 		}
 	}

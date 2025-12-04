@@ -188,6 +188,9 @@ func addSessionFlags(cmd []string, options *shared.Options) []string {
 	if options.Resume != nil {
 		cmd = append(cmd, "--resume", *options.Resume)
 	}
+	if options.SessionID != nil {
+		cmd = append(cmd, "--session-id", *options.SessionID)
+	}
 	if options.MaxTurns > 0 {
 		cmd = append(cmd, "--max-turns", fmt.Sprintf("%d", options.MaxTurns))
 	}

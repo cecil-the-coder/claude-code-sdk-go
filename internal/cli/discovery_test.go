@@ -774,6 +774,61 @@ func TestAddPermissionFlagsComplete(t *testing.T) {
 	}
 }
 
+// TestSessionIDFlag tests that session ID is properly added to command
+func TestSessionIDFlag(t *testing.T) {
+	tests := []struct {
+		name      string
+		options   *shared.Options
+		expectArg bool
+		sessionID string
+	}{
+		{
+			name:      "session_id_present",
+			options:   &shared.Options{SessionID: stringPtr("test-session-123")},
+			expectArg: true,
+			sessionID: "test-session-123",
+		},
+		{
+			name:      "session_id_empty",
+			options:   &shared.Options{SessionID: stringPtr("")},
+			expectArg: true,
+			sessionID: "",
+		},
+		{
+			name:      "session_id_nil",
+			options:   &shared.Options{SessionID: nil},
+			expectArg: false,
+			sessionID: "",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cmd := BuildCommand("/usr/local/bin/claude", test.options, false)
+
+			if test.expectArg {
+				assertContainsArgs(t, cmd, "--session-id", test.sessionID)
+			} else {
+				assertNotContainsArg(t, cmd, "--session-id")
+			}
+		})
+	}
+}
+
+// TestSessionIDWithPrompt tests that session ID works with BuildCommandWithPrompt
+func TestSessionIDWithPrompt(t *testing.T) {
+	sessionID := "my-session"
+	options := &shared.Options{SessionID: &sessionID}
+	prompt := "Hello, world!"
+
+	cmd := BuildCommandWithPrompt("/usr/local/bin/claude", options, prompt)
+
+	// Verify session ID is in the command
+	assertContainsArgs(t, cmd, "--session-id", sessionID)
+	// Verify prompt is also there
+	assertContainsArgs(t, cmd, "--print", prompt)
+}
+
 // TestWorkingDirectoryValidationStatError tests stat error handling
 func TestWorkingDirectoryValidationStatError(t *testing.T) {
 	// Test with a path that will cause os.Stat to return a non-IsNotExist error

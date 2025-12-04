@@ -22,6 +22,7 @@ type Client interface {
 	QueryWithSessionAsync(ctx context.Context, prompt string, sessionID string) (QueryHandle, error)
 	QueryStream(ctx context.Context, messages <-chan StreamMessage) error
 	ReceiveMessages(ctx context.Context) <-chan Message
+	ReceiveMessagesWithErrors(ctx context.Context) (<-chan Message, <-chan error)
 	ReceiveResponse(ctx context.Context) MessageIterator
 	Interrupt(ctx context.Context) error
 	GetStreamIssues() []StreamIssue
@@ -328,6 +329,9 @@ func (c *ClientImpl) queryWithSession(ctx context.Context, prompt string, sessio
 	}
 
 	// Create user message in Python SDK compatible format
+	// Note: session_id is included in JSON for backward compatibility and testing,
+	// but the actual CLI requires it as a --session-id command-line flag which must
+	// be set via WithSessionID option when creating the client.
 	streamMsg := StreamMessage{
 		Type: "user",
 		Message: map[string]interface{}{
@@ -392,6 +396,56 @@ func (c *ClientImpl) ReceiveMessages(_ context.Context) <-chan Message {
 
 	// Return the transport's message channel directly
 	return msgChan
+}
+
+// ReceiveMessagesWithErrors returns both message and error channels from the transport.
+// This exposes the underlying transport error channel which was previously hidden,
+// allowing callers to handle transport-level errors that occur during message streaming.
+//
+// The error channel will receive errors from:
+//   - Transport I/O failures (stdout/stderr read errors)
+//   - Message parsing errors
+//   - Process termination errors
+//
+// Example usage:
+//
+//	msgChan, errChan := client.ReceiveMessagesWithErrors(ctx)
+//	for {
+//	    select {
+//	    case msg, ok := <-msgChan:
+//	        if !ok {
+//	            return // Channel closed, done
+//	        }
+//	        // Process message
+//	    case err, ok := <-errChan:
+//	        if !ok {
+//	            return // Error channel closed
+//	        }
+//	        // Handle error
+//	        log.Printf("Transport error: %v", err)
+//	    case <-ctx.Done():
+//	        return
+//	    }
+//	}
+func (c *ClientImpl) ReceiveMessagesWithErrors(_ context.Context) (<-chan Message, <-chan error) {
+	// Check connection status with read lock
+	c.mu.RLock()
+	connected := c.connected
+	msgChan := c.msgChan
+	errChan := c.errChan
+	c.mu.RUnlock()
+
+	if !connected || msgChan == nil {
+		// Return closed channels if not connected
+		closedMsgChan := make(chan Message)
+		closedErrChan := make(chan error)
+		close(closedMsgChan)
+		close(closedErrChan)
+		return closedMsgChan, closedErrChan
+	}
+
+	// Return both transport channels directly
+	return msgChan, errChan
 }
 
 // ReceiveResponse returns an iterator for the response messages.
