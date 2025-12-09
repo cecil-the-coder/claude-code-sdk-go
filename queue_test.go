@@ -1039,7 +1039,15 @@ func (m *mockClientForQueue) Query(ctx context.Context, prompt string) error {
 	return nil
 }
 
+func (m *mockClientForQueue) QueryWithParentTool(ctx context.Context, prompt string, parentToolUseID *string) error {
+	return nil
+}
+
 func (m *mockClientForQueue) QueryWithSession(ctx context.Context, prompt string, sessionID string) error {
+	return nil
+}
+
+func (m *mockClientForQueue) QueryWithSessionAndParentTool(ctx context.Context, prompt string, sessionID string, parentToolUseID *string) error {
 	return nil
 }
 

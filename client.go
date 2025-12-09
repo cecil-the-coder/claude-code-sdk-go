@@ -17,7 +17,9 @@ type Client interface {
 	Connect(ctx context.Context, prompt ...StreamMessage) error
 	Disconnect() error
 	Query(ctx context.Context, prompt string) error
+	QueryWithParentTool(ctx context.Context, prompt string, parentToolUseID *string) error
 	QueryWithSession(ctx context.Context, prompt string, sessionID string) error
+	QueryWithSessionAndParentTool(ctx context.Context, prompt string, sessionID string, parentToolUseID *string) error
 	QueryAsync(ctx context.Context, prompt string) (QueryHandle, error)
 	QueryWithSessionAsync(ctx context.Context, prompt string, sessionID string) (QueryHandle, error)
 	QueryStream(ctx context.Context, messages <-chan StreamMessage) error
@@ -306,6 +308,22 @@ func (c *ClientImpl) QueryWithSession(ctx context.Context, prompt string, sessio
 	return c.queryWithSession(ctx, prompt, sessionID)
 }
 
+// QueryWithParentTool sends a query with ParentToolUseID for nested tool execution tracking.
+// This is used when a tool needs to execute as a child of another tool.
+func (c *ClientImpl) QueryWithParentTool(ctx context.Context, prompt string, parentToolUseID *string) error {
+	return c.queryWithSessionAndParentTool(ctx, prompt, defaultSessionID, parentToolUseID)
+}
+
+// QueryWithSessionAndParentTool sends a query with both session ID and ParentToolUseID.
+// This combines session management with tool hierarchy tracking.
+func (c *ClientImpl) QueryWithSessionAndParentTool(ctx context.Context, prompt string, sessionID string, parentToolUseID *string) error {
+	// Use default session if empty session ID provided
+	if sessionID == "" {
+		sessionID = defaultSessionID
+	}
+	return c.queryWithSessionAndParentTool(ctx, prompt, sessionID, parentToolUseID)
+}
+
 // queryWithSession is the internal implementation for sending queries with session management.
 func (c *ClientImpl) queryWithSession(ctx context.Context, prompt string, sessionID string) error {
 	// Check context before proceeding
@@ -339,6 +357,46 @@ func (c *ClientImpl) queryWithSession(ctx context.Context, prompt string, sessio
 			"content": prompt,
 		},
 		ParentToolUseID: nil,
+		SessionID:       sessionID,
+	}
+
+	// Send message via transport (without holding mutex to avoid blocking other operations)
+	return transport.SendMessage(ctx, streamMsg)
+}
+
+// queryWithSessionAndParentTool is the internal implementation for sending queries with session management and ParentToolUseID.
+func (c *ClientImpl) queryWithSessionAndParentTool(ctx context.Context, prompt string, sessionID string, parentToolUseID *string) error {
+	// Check context before proceeding
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	// Check connection status with read lock
+	c.mu.RLock()
+	connected := c.connected
+	transport := c.transport
+	c.mu.RUnlock()
+
+	if !connected || transport == nil {
+		return fmt.Errorf("client not connected")
+	}
+
+	// Check context again after acquiring connection info
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	// Create user message in Python SDK compatible format
+	// Note: session_id is included in JSON for backward compatibility and testing,
+	// but the actual CLI requires it as a --session-id command-line flag which must
+	// be set via WithSessionID option when creating the client.
+	streamMsg := StreamMessage{
+		Type: "user",
+		Message: map[string]interface{}{
+			"role":    "user",
+			"content": prompt,
+		},
+		ParentToolUseID: parentToolUseID,
 		SessionID:       sessionID,
 	}
 

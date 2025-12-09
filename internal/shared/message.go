@@ -32,8 +32,9 @@ type ContentBlock interface {
 
 // UserMessage represents a message from the user.
 type UserMessage struct {
-	MessageType string      `json:"type"`
-	Content     interface{} `json:"content"` // string or []ContentBlock
+	MessageType     string      `json:"type"`
+	Content         interface{} `json:"content"` // string or []ContentBlock
+	ParentToolUseID *string     `json:"parent_tool_use_id,omitempty"`
 }
 
 // Type returns the message type for UserMessage.
@@ -45,7 +46,7 @@ func (m *UserMessage) Type() string {
 func (m *UserMessage) MarshalJSON() ([]byte, error) {
 	type userMessage UserMessage
 	temp := struct {
-		Type string `json:"type"`
+		Type           string `json:"type"`
 		*userMessage
 	}{
 		Type:        MessageTypeUser,
@@ -56,9 +57,10 @@ func (m *UserMessage) MarshalJSON() ([]byte, error) {
 
 // AssistantMessage represents a message from the assistant.
 type AssistantMessage struct {
-	MessageType string         `json:"type"`
-	Content     []ContentBlock `json:"content"`
-	Model       string         `json:"model"`
+	MessageType     string         `json:"type"`
+	Content         []ContentBlock `json:"content"`
+	Model           string         `json:"model"`
+	ParentToolUseID *string        `json:"parent_tool_use_id,omitempty"` // For subagent tool_use routing
 }
 
 // Type returns the message type for AssistantMessage.
@@ -172,10 +174,11 @@ func (b *ToolUseBlock) BlockType() string {
 
 // ToolResultBlock represents the result of a tool use.
 type ToolResultBlock struct {
-	MessageType string      `json:"type"`
-	ToolUseID   string      `json:"tool_use_id"`
-	Content     interface{} `json:"content"` // string or structured data
-	IsError     *bool       `json:"is_error,omitempty"`
+	MessageType     string      `json:"type"`
+	ToolUseID       string      `json:"tool_use_id"`
+	ParentToolUseID *string     `json:"parent_tool_use_id,omitempty"`
+	Content         interface{} `json:"content"` // string or structured data
+	IsError         *bool       `json:"is_error,omitempty"`
 }
 
 // BlockType returns the content block type for ToolResultBlock.

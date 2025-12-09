@@ -4,6 +4,7 @@ package parser
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 
@@ -155,17 +156,46 @@ func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, err
 		return nil, shared.NewMessageParseError("user message missing content field", data)
 	}
 
+	// Extract ParentToolUseID from top-level data (CLI sends it here)
+	var parentToolUseID *string
+	if ptuid, ok := data["parent_tool_use_id"].(string); ok && ptuid != "" {
+		parentToolUseID = &ptuid
+	}
+
 	// Handle both string content and array of content blocks
 	switch c := content.(type) {
 	case string:
 		// String content - create directly
 		return &shared.UserMessage{
-			Content: c,
+			Content:        c,
+			ParentToolUseID: parentToolUseID,
 		}, nil
 	case []any:
 		// Array of content blocks
 		blocks := make([]shared.ContentBlock, len(c))
 		for i, blockData := range c {
+			// Check if this is a tool_result block that needs ParentToolUseID
+			if data, ok := blockData.(map[string]any); ok {
+				// Tool result blocks can be identified by either:
+				// 1. Explicit type="tool_result"
+				// 2. Presence of tool_use_id field without type field (common for subagent responses)
+				isToolResult := false
+				if blockType, ok := data["type"].(string); ok && blockType == shared.ContentBlockTypeToolResult {
+					isToolResult = true
+				} else if _, hasType := data["type"]; !hasType && data["tool_use_id"] != nil {
+					// No type field but has tool_use_id - this is likely a tool_result from subagent
+					isToolResult = true
+					// Set the type field explicitly for consistency
+					data["type"] = shared.ContentBlockTypeToolResult
+				}
+
+				if isToolResult {
+					// For tool_result blocks, ensure ParentToolUseID is set if not already present
+					if _, exists := data["parent_tool_use_id"]; !exists && parentToolUseID != nil {
+						data["parent_tool_use_id"] = *parentToolUseID
+					}
+				}
+			}
 			block, err := p.parseContentBlock(blockData)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse content block %d: %w", i, err)
@@ -173,7 +203,8 @@ func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, err
 			blocks[i] = block
 		}
 		return &shared.UserMessage{
-			Content: blocks,
+			Content:        blocks,
+			ParentToolUseID: parentToolUseID,
 		}, nil
 	default:
 		return nil, shared.NewMessageParseError("invalid user message content type", data)
@@ -197,6 +228,12 @@ func (p *Parser) parseAssistantMessage(data map[string]any) (*shared.AssistantMe
 		return nil, shared.NewMessageParseError("assistant message missing model field", data)
 	}
 
+	// Extract ParentToolUseID from top-level data (CLI sends it at message wrapper level for subagent tools)
+	var parentToolUseID *string
+	if ptuid, ok := data["parent_tool_use_id"].(string); ok && ptuid != "" {
+		parentToolUseID = &ptuid
+	}
+
 	blocks := make([]shared.ContentBlock, len(contentArray))
 	for i, blockData := range contentArray {
 		block, err := p.parseContentBlock(blockData)
@@ -207,8 +244,9 @@ func (p *Parser) parseAssistantMessage(data map[string]any) (*shared.AssistantMe
 	}
 
 	return &shared.AssistantMessage{
-		Content: blocks,
-		Model:   model,
+		Content:         blocks,
+		Model:           model,
+		ParentToolUseID: parentToolUseID,
 	}, nil
 }
 
@@ -359,6 +397,13 @@ func (p *Parser) parseToolResultBlock(data map[string]any) (shared.ContentBlock,
 		return nil, shared.NewMessageParseError("tool_result block missing tool_use_id field", data)
 	}
 
+	var parentToolUseID *string
+	if parentIDValue, exists := data["parent_tool_use_id"]; exists {
+		if str, ok := parentIDValue.(string); ok {
+			parentToolUseID = &str
+		}
+	}
+
 	var isError *bool
 	if isErrorValue, exists := data["is_error"]; exists {
 		if b, ok := isErrorValue.(bool); ok {
@@ -366,10 +411,15 @@ func (p *Parser) parseToolResultBlock(data map[string]any) (shared.ContentBlock,
 		}
 	}
 
+	// Debug logging to track ParentToolUseID parsing
+	log.Printf("[PARSER-DEBUG] parseToolResultBlock: toolUseID=%s, parentToolUseID=%v",
+		toolUseID, parentToolUseID)
+
 	return &shared.ToolResultBlock{
-		ToolUseID: toolUseID,
-		Content:   data["content"],
-		IsError:   isError,
+		ToolUseID:       toolUseID,
+		ParentToolUseID: parentToolUseID,
+		Content:         data["content"],
+		IsError:         isError,
 	}, nil
 }
 
