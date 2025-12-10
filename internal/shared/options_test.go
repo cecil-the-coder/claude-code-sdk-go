@@ -1,6 +1,7 @@
 package shared
 
 import (
+	"context"
 	"testing"
 )
 
@@ -107,6 +108,31 @@ func TestOptionsValidation(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "MaxTurns must be non-negative, got -5",
+		},
+		{
+			name: "can_use_tool_with_permission_prompt_tool_name",
+			setup: func() *Options {
+				opts := NewOptions()
+				toolName := "custom-tool"
+				opts.PermissionPromptToolName = &toolName
+				opts.CanUseTool = func(ctx context.Context, toolName string, input map[string]interface{}, context ToolPermissionContext) (PermissionResult, error) {
+					return &PermissionResultAllow{}, nil
+				}
+				return opts
+			},
+			wantErr: true,
+			errMsg:  "CanUseTool callback and PermissionPromptToolName are mutually exclusive",
+		},
+		{
+			name: "can_use_tool_without_permission_prompt_tool_name",
+			setup: func() *Options {
+				opts := NewOptions()
+				opts.CanUseTool = func(ctx context.Context, toolName string, input map[string]interface{}, context ToolPermissionContext) (PermissionResult, error) {
+					return &PermissionResultAllow{}, nil
+				}
+				return opts
+			},
+			wantErr: false,
 		},
 	}
 
