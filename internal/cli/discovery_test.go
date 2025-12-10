@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -215,6 +216,130 @@ func TestCLIVersionDetection(t *testing.T) {
 	ctx := context.Background()
 	_, err := DetectCLIVersion(ctx, nonExistentPath)
 	assertVersionDetectionError(t, err)
+}
+
+// TestAgentsFlag tests --agents flag with custom agent definitions
+func TestAgentsFlag(t *testing.T) {
+	tests := []struct {
+		name     string
+		options  *shared.Options
+		validate func(*testing.T, []string)
+	}{
+		{
+			name: "single_agent_minimal",
+			options: &shared.Options{
+				Agents: map[string]shared.AgentDefinition{
+					"code-reviewer": {
+						Description: "Reviews code",
+						Prompt:      "You are a code reviewer",
+					},
+				},
+			},
+			validate: validateSingleAgentCommand,
+		},
+		{
+			name: "agent_with_tools_and_model",
+			options: &shared.Options{
+				Agents: map[string]shared.AgentDefinition{
+					"doc-writer": {
+						Description: "Writes documentation",
+						Prompt:      "You are a documentation expert",
+						Tools:       []string{"Read", "Write", "Edit"},
+						Model:       stringPtr("sonnet"),
+					},
+				},
+			},
+			validate: validateAgentWithToolsAndModel,
+		},
+		{
+			name: "multiple_agents",
+			options: &shared.Options{
+				Agents: map[string]shared.AgentDefinition{
+					"reviewer": {
+						Description: "Code reviewer",
+						Prompt:      "Review code",
+						Tools:       []string{"Read", "Grep"},
+						Model:       stringPtr("sonnet"),
+					},
+					"writer": {
+						Description: "Doc writer",
+						Prompt:      "Write docs",
+						Tools:       []string{"Write"},
+					},
+				},
+			},
+			validate: validateMultipleAgentsCommand,
+		},
+		{
+			name:     "no_agents",
+			options:  &shared.Options{},
+			validate: validateNoAgentsCommand,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cmd := BuildCommand("/usr/local/bin/claude", test.options, true)
+			test.validate(t, cmd)
+		})
+	}
+}
+
+// TestAgentsJSONMarshaling tests that agents are properly marshaled with nil field filtering
+func TestAgentsJSONMarshaling(t *testing.T) {
+	modelSonnet := "sonnet"
+	agents := map[string]shared.AgentDefinition{
+		"test-agent": {
+			Description: "Test",
+			Prompt:      "Test prompt",
+			Tools:       nil,
+			Model:       &modelSonnet,
+		},
+	}
+
+	options := &shared.Options{Agents: agents}
+	cmd := BuildCommand("/usr/local/bin/claude", options, true)
+
+	// Find --agents flag
+	agentsIdx := findArgIndex(cmd, "--agents")
+	if agentsIdx == -1 {
+		t.Fatal("Expected --agents flag in command")
+	}
+
+	if agentsIdx+1 >= len(cmd) {
+		t.Fatal("Expected value after --agents flag")
+	}
+
+	agentsJSON := cmd[agentsIdx+1]
+
+	// Parse JSON to verify structure
+	var parsed map[string]map[string]interface{}
+	if err := json.Unmarshal([]byte(agentsJSON), &parsed); err != nil {
+		t.Fatalf("Failed to parse agents JSON: %v", err)
+	}
+
+	testAgent, ok := parsed["test-agent"]
+	if !ok {
+		t.Fatal("Expected 'test-agent' in parsed JSON")
+	}
+
+	// Verify nil tools field is omitted
+	if _, hasTools := testAgent["tools"]; hasTools {
+		t.Error("Expected nil 'tools' field to be omitted from JSON")
+	}
+
+	// Verify model field is present
+	if model, ok := testAgent["model"]; !ok || model != "sonnet" {
+		t.Errorf("Expected model='sonnet', got %v", model)
+	}
+
+	// Verify required fields are present
+	if desc, ok := testAgent["description"]; !ok || desc != "Test" {
+		t.Errorf("Expected description='Test', got %v", desc)
+	}
+	if prompt, ok := testAgent["prompt"]; !ok || prompt != "Test prompt" {
+		t.Errorf("Expected prompt='Test prompt', got %v", prompt)
+	}
 }
 
 // Helper Functions
@@ -859,6 +984,91 @@ func TestWorkingDirectoryValidationStatError(t *testing.T) {
 			}
 		})
 	}
+}
+
+func validateSingleAgentCommand(t *testing.T, cmd []string) {
+	t.Helper()
+	agentsIdx := findArgIndex(cmd, "--agents")
+	if agentsIdx == -1 {
+		t.Fatal("Expected --agents flag in command")
+	}
+}
+
+func validateAgentWithToolsAndModel(t *testing.T, cmd []string) {
+	t.Helper()
+	agentsIdx := findArgIndex(cmd, "--agents")
+	if agentsIdx == -1 {
+		t.Fatal("Expected --agents flag in command")
+	}
+
+	if agentsIdx+1 >= len(cmd) {
+		t.Fatal("Expected value after --agents flag")
+	}
+
+	agentsJSON := cmd[agentsIdx+1]
+	var parsed map[string]map[string]interface{}
+	if err := json.Unmarshal([]byte(agentsJSON), &parsed); err != nil {
+		t.Fatalf("Failed to parse agents JSON: %v", err)
+	}
+
+	agent, ok := parsed["doc-writer"]
+	if !ok {
+		t.Fatal("Expected 'doc-writer' agent in JSON")
+	}
+
+	// Verify tools array is present
+	if tools, ok := agent["tools"]; !ok {
+		t.Error("Expected 'tools' field in agent")
+	} else if toolsArray, ok := tools.([]interface{}); !ok || len(toolsArray) != 3 {
+		t.Errorf("Expected tools array with 3 elements, got %v", tools)
+	}
+
+	// Verify model is present
+	if model, ok := agent["model"]; !ok || model != "sonnet" {
+		t.Errorf("Expected model='sonnet', got %v", model)
+	}
+}
+
+func validateMultipleAgentsCommand(t *testing.T, cmd []string) {
+	t.Helper()
+	agentsIdx := findArgIndex(cmd, "--agents")
+	if agentsIdx == -1 {
+		t.Fatal("Expected --agents flag in command")
+	}
+
+	agentsJSON := cmd[agentsIdx+1]
+	var parsed map[string]map[string]interface{}
+	if err := json.Unmarshal([]byte(agentsJSON), &parsed); err != nil {
+		t.Fatalf("Failed to parse agents JSON: %v", err)
+	}
+
+	if len(parsed) != 2 {
+		t.Errorf("Expected 2 agents, got %d", len(parsed))
+	}
+
+	if _, ok := parsed["reviewer"]; !ok {
+		t.Error("Expected 'reviewer' agent")
+	}
+	if _, ok := parsed["writer"]; !ok {
+		t.Error("Expected 'writer' agent")
+	}
+}
+
+func validateNoAgentsCommand(t *testing.T, cmd []string) {
+	t.Helper()
+	agentsIdx := findArgIndex(cmd, "--agents")
+	if agentsIdx != -1 {
+		t.Error("Expected no --agents flag when Agents is empty")
+	}
+}
+
+func findArgIndex(cmd []string, arg string) int {
+	for i, a := range cmd {
+		if a == arg {
+			return i
+		}
+	}
+	return -1
 }
 
 func stringPtr(s string) *string {

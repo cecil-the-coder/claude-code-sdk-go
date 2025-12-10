@@ -3,6 +3,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -139,6 +140,7 @@ func addOptionsToCommand(cmd []string, options *shared.Options) []string {
 	cmd = addPermissionFlags(cmd, options)
 	cmd = addSessionFlags(cmd, options)
 	cmd = addFileSystemFlags(cmd, options)
+	cmd = addAgentFlags(cmd, options)
 	cmd = addMCPFlags(cmd, options)
 	cmd = addExtraFlags(cmd, options)
 	return cmd
@@ -205,6 +207,41 @@ func addFileSystemFlags(cmd []string, options *shared.Options) []string {
 	for _, dir := range options.AddDirs {
 		cmd = append(cmd, "--add-dir", dir)
 	}
+	return cmd
+}
+
+func addAgentFlags(cmd []string, options *shared.Options) []string {
+	if len(options.Agents) == 0 {
+		return cmd
+	}
+
+	// Filter nil fields from each AgentDefinition before marshaling
+	// This matches Python SDK behavior: {k: v for k, v in asdict(agent_def).items() if v is not None}
+	agentsDict := make(map[string]map[string]interface{})
+	for name, agent := range options.Agents {
+		agentMap := make(map[string]interface{})
+		agentMap["description"] = agent.Description
+		agentMap["prompt"] = agent.Prompt
+
+		if agent.Tools != nil {
+			agentMap["tools"] = agent.Tools
+		}
+		if agent.Model != nil {
+			agentMap["model"] = *agent.Model
+		}
+
+		agentsDict[name] = agentMap
+	}
+
+	// Marshal to JSON
+	agentsJSON, err := json.Marshal(agentsDict)
+	if err != nil {
+		// This should never happen with our controlled types, but handle gracefully
+		// Don't add the flag if marshaling fails
+		return cmd
+	}
+
+	cmd = append(cmd, "--agents", string(agentsJSON))
 	return cmd
 }
 

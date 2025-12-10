@@ -25,6 +25,16 @@ type McpSSEServerConfig = shared.McpSSEServerConfig
 // McpHTTPServerConfig represents an HTTP MCP server configuration.
 type McpHTTPServerConfig = shared.McpHTTPServerConfig
 
+// AgentDefinition defines a custom agent with specific prompts, tools, and model.
+type AgentDefinition = shared.AgentDefinition
+
+// Hook System Types
+type HookEventName = shared.HookEventName
+type HookCallback = shared.HookCallback
+type HookMatcher = shared.HookMatcher
+type HookInput = shared.HookInput
+type HookContext = shared.HookContext
+
 // Re-export constants
 const (
 	PermissionModeDefault           = shared.PermissionModeDefault
@@ -34,6 +44,13 @@ const (
 	McpServerTypeStdio              = shared.McpServerTypeStdio
 	McpServerTypeSSE                = shared.McpServerTypeSSE
 	McpServerTypeHTTP               = shared.McpServerTypeHTTP
+	HookEventPreToolUse             = shared.HookEventPreToolUse
+	HookEventPostToolUse            = shared.HookEventPostToolUse
+	HookEventUserPromptSubmit       = shared.HookEventUserPromptSubmit
+	HookEventStop                   = shared.HookEventStop
+	HookEventSubagentStop           = shared.HookEventSubagentStop
+	HookEventPreCompact             = shared.HookEventPreCompact
+	DefaultHookTimeout              = shared.DefaultHookTimeout
 )
 
 // Option configures Options using the functional options pattern.
@@ -95,6 +112,57 @@ func WithPermissionPromptToolName(toolName string) Option {
 	}
 }
 
+// WithCanUseTool sets the tool permission callback for dynamic permission decisions.
+// The callback is invoked when Claude wants to use a tool, allowing you to:
+//   - Allow the tool use (optionally modifying inputs or updating permissions)
+//   - Deny the tool use (optionally interrupting the conversation)
+//
+// When this callback is set, it automatically sets permission_prompt_tool_name="stdio"
+// for control protocol communication. This option is mutually exclusive with
+// WithPermissionPromptToolName - setting both will cause validation to fail.
+//
+// The callback receives context for cancellation, tool name, input parameters,
+// and additional context including CLI suggestions.
+//
+// Example - Block dangerous commands:
+//
+//	WithCanUseTool(func(ctx context.Context, toolName string, input map[string]interface{}, context ToolPermissionContext) (PermissionResult, error) {
+//	    if toolName == "Bash" {
+//	        command := input["command"].(string)
+//	        if strings.Contains(command, "rm -rf") {
+//	            return &PermissionResultDeny{
+//	                Message: "Dangerous command blocked",
+//	            }, nil
+//	        }
+//	    }
+//	    return &PermissionResultAllow{}, nil
+//	})
+//
+// Example - Redirect file writes to safe directory:
+//
+//	WithCanUseTool(func(ctx context.Context, toolName string, input map[string]interface{}, context ToolPermissionContext) (PermissionResult, error) {
+//	    if toolName == "Write" {
+//	        filePath := input["file_path"].(string)
+//	        if !strings.HasPrefix(filePath, "/tmp/") {
+//	            safePath := filepath.Join("/tmp", filepath.Base(filePath))
+//	            modifiedInput := make(map[string]interface{})
+//	            for k, v := range input {
+//	                modifiedInput[k] = v
+//	            }
+//	            modifiedInput["file_path"] = safePath
+//	            return &PermissionResultAllow{
+//	                UpdatedInput: modifiedInput,
+//	            }, nil
+//	        }
+//	    }
+//	    return &PermissionResultAllow{}, nil
+//	})
+func WithCanUseTool(callback CanUseToolFunc) Option {
+	return func(o *Options) {
+		o.CanUseTool = callback
+	}
+}
+
 // WithContinueConversation enables conversation continuation.
 func WithContinueConversation(continueConversation bool) Option {
 	return func(o *Options) {
@@ -134,6 +202,95 @@ func WithAddDirs(dirs ...string) Option {
 func WithMcpServers(servers map[string]McpServerConfig) Option {
 	return func(o *Options) {
 		o.McpServers = servers
+	}
+}
+
+// WithAgents sets the custom agent definitions.
+func WithAgents(agents map[string]AgentDefinition) Option {
+	return func(o *Options) {
+		o.Agents = agents
+	}
+}
+
+// WithHooks sets hook callbacks for lifecycle events.
+// Hooks allow you to intercept and respond to events like tool execution,
+// user prompts, conversation stops, and history compaction.
+//
+// Example - Log all tool usage:
+//
+//	WithHooks(map[HookEventName]*HookMatcher{
+//	    HookEventPreToolUse: {
+//	        Matcher: nil, // matches all tools
+//	        Hooks: []HookCallback{
+//	            func(ctx context.Context, input HookInput, toolUseID *string, context HookContext) (map[string]any, error) {
+//	                log.Printf("Tool: %s, Input: %v", *input.ToolName, input.ToolInput)
+//	                return map[string]any{"continue": true}, nil
+//	            },
+//	        },
+//	    },
+//	})
+//
+// Example - Block dangerous bash commands:
+//
+//	WithHooks(map[HookEventName]*HookMatcher{
+//	    HookEventPreToolUse: {
+//	        Matcher: strPtr("Bash"),
+//	        Hooks: []HookCallback{
+//	            func(ctx context.Context, input HookInput, toolUseID *string, context HookContext) (map[string]any, error) {
+//	                command := input.ToolInput["command"].(string)
+//	                if strings.Contains(command, "rm -rf") {
+//	                    return map[string]any{
+//	                        "decision": "deny",
+//	                        "systemMessage": "Dangerous command blocked",
+//	                    }, nil
+//	                }
+//	                return map[string]any{"continue": true}, nil
+//	            },
+//	        },
+//	    },
+//	})
+//
+// Example - Add context after tool execution:
+//
+//	WithHooks(map[HookEventName]*HookMatcher{
+//	    HookEventPostToolUse: {
+//	        Matcher: strPtr("Bash|Edit|Write"),
+//	        Hooks: []HookCallback{
+//	            func(ctx context.Context, input HookInput, toolUseID *string, context HookContext) (map[string]any, error) {
+//	                return map[string]any{
+//	                    "continue": true,
+//	                    "additionalContext": "Tool executed successfully",
+//	                }, nil
+//	            },
+//	        },
+//	    },
+//	})
+func WithHooks(hooks map[HookEventName]*HookMatcher) Option {
+	return func(o *Options) {
+		if o.Hooks == nil {
+			o.Hooks = make(map[HookEventName]*HookMatcher)
+		}
+		for k, v := range hooks {
+			o.Hooks[k] = v
+		}
+	}
+}
+
+// WithHook adds a single hook for a specific event type.
+// This is a convenience method for adding individual hooks.
+//
+// Example:
+//
+//	WithHook(HookEventPreToolUse, &HookMatcher{
+//	    Matcher: strPtr("Bash"),
+//	    Hooks: []HookCallback{myCallback},
+//	})
+func WithHook(eventType HookEventName, matcher *HookMatcher) Option {
+	return func(o *Options) {
+		if o.Hooks == nil {
+			o.Hooks = make(map[HookEventName]*HookMatcher)
+		}
+		o.Hooks[eventType] = matcher
 	}
 }
 

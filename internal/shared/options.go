@@ -1,11 +1,51 @@
 package shared
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 const (
 	// DefaultMaxThinkingTokens is the default maximum number of thinking tokens.
 	DefaultMaxThinkingTokens = 8000
 )
+
+// AgentDefinition defines a custom agent with specific prompts, tools, and model.
+type AgentDefinition struct {
+	// Description provides a brief description of the agent's purpose (required)
+	Description string `json:"description"`
+
+	// Prompt is the system prompt that completely replaces the default prompt (required)
+	Prompt string `json:"prompt"`
+
+	// Tools specifies the exact allowed tools for this agent
+	// nil/empty means inherit default tool configuration
+	Tools []string `json:"tools,omitempty"`
+
+	// Model specifies which model to use: "sonnet", "opus", "haiku", or "inherit"
+	// nil means use the default/parent model
+	Model *string `json:"model,omitempty"`
+}
+
+// MarshalJSON implements custom JSON marshaling to filter nil fields
+func (a AgentDefinition) MarshalJSON() ([]byte, error) {
+	// Create a map to hold non-nil fields
+	m := make(map[string]interface{})
+
+	// Always include required fields
+	m["description"] = a.Description
+	m["prompt"] = a.Prompt
+
+	// Only include optional fields if they have values
+	if a.Tools != nil {
+		m["tools"] = a.Tools
+	}
+	if a.Model != nil {
+		m["model"] = *a.Model
+	}
+
+	return json.Marshal(m)
+}
 
 // PermissionMode represents the different permission handling modes.
 type PermissionMode string
@@ -37,6 +77,15 @@ type Options struct {
 	PermissionMode           *PermissionMode `json:"permission_mode,omitempty"`
 	PermissionPromptToolName *string         `json:"permission_prompt_tool_name,omitempty"`
 
+	// CanUseTool callback for dynamic tool permission decisions.
+	// When set, automatically sets permission_prompt_tool_name="stdio".
+	// Mutually exclusive with explicit PermissionPromptToolName setting.
+	CanUseTool CanUseToolFunc `json:"-"`
+
+	// Hook System - lifecycle event callbacks
+	// Map of hook event types to their matchers and callbacks
+	Hooks map[HookEventName]*HookMatcher `json:"-"`
+
 	// Session & State Management
 	ContinueConversation bool    `json:"continue_conversation,omitempty"`
 	Resume               *string `json:"resume,omitempty"`
@@ -50,6 +99,9 @@ type Options struct {
 
 	// MCP Integration
 	McpServers map[string]McpServerConfig `json:"mcp_servers,omitempty"`
+
+	// Agent Definitions
+	Agents map[string]AgentDefinition `json:"agents,omitempty"`
 
 	// Extensibility
 	ExtraArgs map[string]*string `json:"extra_args,omitempty"`
@@ -140,6 +192,11 @@ func (o *Options) Validate() error {
 		}
 	}
 
+	// Validate CanUseTool callback is mutually exclusive with PermissionPromptToolName
+	if o.CanUseTool != nil && o.PermissionPromptToolName != nil {
+		return fmt.Errorf("CanUseTool callback and PermissionPromptToolName are mutually exclusive")
+	}
+
 	return nil
 }
 
@@ -151,7 +208,9 @@ func NewOptions() *Options {
 		MaxThinkingTokens: DefaultMaxThinkingTokens,
 		AddDirs:           []string{},
 		McpServers:        make(map[string]McpServerConfig),
+		Agents:            make(map[string]AgentDefinition),
 		ExtraArgs:         make(map[string]*string),
 		ExtraEnv:          make(map[string]string),
+		Hooks:             make(map[HookEventName]*HookMatcher),
 	}
 }
