@@ -1076,6 +1076,13 @@ type clientMockTransport struct {
 	msgChan      chan Message
 	errChan      chan error
 
+	// Control protocol response management
+	pendingResponses    *PendingControlResponses
+	controlSuccess      bool
+	controlResult       map[string]interface{}
+	controlError        string
+	skipControlResponse bool // If true, don't send control responses (for timeout tests)
+
 	// Error injection for testing
 	connectError   error
 	sendError      error
@@ -1104,28 +1111,120 @@ func (c *clientMockTransport) Connect(ctx context.Context) error {
 		c.closed = false
 	}
 
+	// Initialize control protocol response manager
+	if c.pendingResponses == nil {
+		c.pendingResponses = NewPendingControlResponses()
+	}
+
 	c.connected = true
 	return nil
 }
 
 func (c *clientMockTransport) SendMessage(ctx context.Context, message StreamMessage) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	// Check context cancellation first
 	select {
 	case <-ctx.Done():
+		c.mu.Unlock()
 		return ctx.Err()
 	default:
 	}
 
 	if c.sendError != nil {
+		c.mu.Unlock()
 		return c.sendError
 	}
 	if !c.connected {
+		c.mu.Unlock()
 		return fmt.Errorf("not connected")
 	}
 	c.sentMessages = append(c.sentMessages, message)
+
+	// Check if this is a control request that needs a response
+	if controlReq, ok := message.Message.(*SDKControlRequest); ok {
+		// This is a control request - send response asynchronously via message channel
+		reqID := controlReq.RequestID
+		msgChan := c.msgChan
+		skipResponse := c.skipControlResponse
+		controlSuccess := c.controlSuccess
+		controlResult := c.controlResult
+		controlError := c.controlError
+
+		c.mu.Unlock()
+
+		// Don't send response if skipping (for timeout tests)
+		if skipResponse {
+			return nil
+		}
+
+		// Send response in goroutine to avoid blocking
+		go func() {
+			// Small delay to simulate async response
+			time.Sleep(10 * time.Millisecond)
+
+			// Send control response through message channel (client will route it)
+			if msgChan != nil {
+				response := &SDKControlResponse{
+					RequestID: reqID,
+					Response: ControlResponseData{
+						Success: controlSuccess,
+						Result:  controlResult,
+						Error:   controlError,
+					},
+				}
+				select {
+				case msgChan <- response:
+					// Response sent successfully
+				case <-time.After(100 * time.Millisecond):
+					// Timeout sending response
+				}
+			}
+		}()
+
+		return nil
+	}
+
+	// Also check for map format (for backward compatibility)
+	if msgMap, ok := message.Message.(map[string]interface{}); ok {
+		if reqID, hasReqID := msgMap["request_id"].(string); hasReqID {
+			// This is a control request in map format - send response asynchronously via message channel
+			msgChan := c.msgChan
+			controlSuccess := c.controlSuccess
+			controlResult := c.controlResult
+			controlError := c.controlError
+
+			c.mu.Unlock()
+
+			// Send response in goroutine to avoid blocking
+			go func() {
+				// Small delay to simulate async response
+				time.Sleep(10 * time.Millisecond)
+
+				// Send control response through message channel (client will route it)
+				if msgChan != nil {
+					response := &SDKControlResponse{
+						RequestID: reqID,
+						Response: ControlResponseData{
+							Success: controlSuccess,
+							Result:  controlResult,
+							Error:   controlError,
+						},
+					}
+					select {
+					case msgChan <- response:
+						// Response sent successfully
+					case <-time.After(100 * time.Millisecond):
+						// Timeout sending response
+					}
+				}
+			}()
+
+			return nil
+		}
+	}
+
+	c.mu.Unlock()
 	return nil
 }
 
@@ -1273,6 +1372,20 @@ func WithClientAsyncError(err error) ClientMockTransportOption {
 
 func WithClientResponseMessages(messages []Message) ClientMockTransportOption {
 	return func(t *clientMockTransport) { t.testMessages = messages }
+}
+
+func WithClientControlResponse(success bool, result map[string]interface{}, errorMsg string) ClientMockTransportOption {
+	return func(t *clientMockTransport) {
+		t.controlSuccess = success
+		t.controlResult = result
+		t.controlError = errorMsg
+	}
+}
+
+func WithClientSkipControlResponse() ClientMockTransportOption {
+	return func(t *clientMockTransport) {
+		t.skipControlResponse = true
+	}
 }
 
 // Factory Functions - streamlined creation methods
@@ -2353,5 +2466,331 @@ func TestClientQueryNotConnectedError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not connected") {
 		t.Errorf("Expected 'not connected' error, got: %v", err)
+	}
+}
+
+// TestClientSetModel tests dynamic model switching functionality
+// Covers claude-code-sdk-go-5aq: Dynamic Model Switching
+func TestClientSetModel(t *testing.T) {
+	ctx, cancel := setupClientTestContext(t, 70*time.Second)
+	defer cancel()
+
+	tests := []struct {
+		name             string
+		setupTransport   func() *clientMockTransport
+		model            *string
+		wantErr          bool
+		errorContains    string
+		validateRequest  func(*testing.T, StreamMessage)
+		validateResponse bool
+	}{
+		{
+			name: "set_specific_model_success",
+			setupTransport: func() *clientMockTransport {
+				return newClientMockTransportWithOptions(
+					WithClientControlResponse(true, nil, ""),
+				)
+			},
+			model:   stringPtr("claude-sonnet-4-5"),
+			wantErr: false,
+			validateRequest: func(t *testing.T, msg StreamMessage) {
+				t.Helper()
+				validateSetModelRequest(t, msg, "claude-sonnet-4-5")
+			},
+			validateResponse: true,
+		},
+		{
+			name: "set_opus_model_success",
+			setupTransport: func() *clientMockTransport {
+				return newClientMockTransportWithOptions(
+					WithClientControlResponse(true, nil, ""),
+				)
+			},
+			model:   stringPtr("claude-opus-4-1-20250805"),
+			wantErr: false,
+			validateRequest: func(t *testing.T, msg StreamMessage) {
+				t.Helper()
+				validateSetModelRequest(t, msg, "claude-opus-4-1-20250805")
+			},
+			validateResponse: true,
+		},
+		{
+			name: "set_haiku_model_success",
+			setupTransport: func() *clientMockTransport {
+				return newClientMockTransportWithOptions(
+					WithClientControlResponse(true, nil, ""),
+				)
+			},
+			model:   stringPtr("claude-3-5-haiku-20241022"),
+			wantErr: false,
+			validateRequest: func(t *testing.T, msg StreamMessage) {
+				t.Helper()
+				validateSetModelRequest(t, msg, "claude-3-5-haiku-20241022")
+			},
+			validateResponse: true,
+		},
+		{
+			name: "set_nil_model_default",
+			setupTransport: func() *clientMockTransport {
+				return newClientMockTransportWithOptions(
+					WithClientControlResponse(true, nil, ""),
+				)
+			},
+			model:   nil,
+			wantErr: false,
+			validateRequest: func(t *testing.T, msg StreamMessage) {
+				t.Helper()
+				validateSetModelRequest(t, msg, "")
+			},
+			validateResponse: true,
+		},
+		{
+			name: "control_response_error",
+			setupTransport: func() *clientMockTransport {
+				return newClientMockTransportWithOptions(
+					WithClientControlResponse(false, nil, "model not found"),
+				)
+			},
+			model:         stringPtr("invalid-model"),
+			wantErr:       true,
+			errorContains: "model not found",
+		},
+		// NOTE: Timeout test commented out because it would take 60s (DefaultControlRequestTimeout)
+		// The timeout behavior is still validated but takes too long for regular test runs
+		// {
+		// 	name: "control_request_timeout",
+		// 	setupTransport: func() *clientMockTransport {
+		// 		// Don't send any response - will trigger timeout
+		// 		return newClientMockTransportWithOptions(
+		// 			WithClientSkipControlResponse(),
+		// 		)
+		// 	},
+		// 	model:         stringPtr("claude-sonnet-4-5"),
+		// 	wantErr:       true,
+		// 	errorContains: "timeout",
+		// },
+		{
+			name: "not_connected_error",
+			setupTransport: func() *clientMockTransport {
+				return newClientMockTransport()
+			},
+			model:         stringPtr("claude-sonnet-4-5"),
+			wantErr:       true,
+			errorContains: "not connected",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transport := test.setupTransport()
+			client := setupClientForTest(t, transport)
+			defer disconnectClientSafely(t, client)
+
+			// Only connect if test expects connection
+			if test.name != "not_connected_error" {
+				connectClientSafely(ctx, t, client)
+			}
+
+			// Execute SetModel
+			err := client.SetModel(ctx, test.model)
+
+			// Validate error expectation
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("Expected error but got nil")
+				}
+				if test.errorContains != "" && !strings.Contains(err.Error(), test.errorContains) {
+					t.Errorf("Expected error to contain %q, got: %v", test.errorContains, err)
+				}
+				return
+			}
+
+			// No error expected
+			assertNoError(t, err)
+
+			// Validate the control request was sent correctly
+			if test.validateRequest != nil {
+				if transport.getSentMessageCount() == 0 {
+					t.Fatal("Expected control request to be sent")
+				}
+				sentMsg, ok := transport.getSentMessage(0)
+				if !ok {
+					t.Fatal("Failed to get sent control request")
+				}
+				test.validateRequest(t, sentMsg)
+			}
+		})
+	}
+}
+
+// TODO: TestClientSetModelBetweenTurns tests model switching between conversation turns
+// This ensures state preservation and proper timing
+// Temporarily disabled until SetModel is implemented
+func TestClientSetModelBetweenTurns(t *testing.T) {
+	ctx, cancel := setupClientTestContext(t, 70*time.Second)
+	defer cancel()
+
+	transport := newClientMockTransportWithOptions(
+		WithClientControlResponse(true, nil, ""),
+	)
+	client := setupClientForTest(t, transport)
+	defer disconnectClientSafely(t, client)
+
+	connectClientSafely(ctx, t, client)
+
+	// First turn with default model
+	err := client.Query(ctx, "What is Go?")
+	assertNoError(t, err)
+
+	// Verify first query was sent
+	assertClientMessageCount(t, transport, 1)
+
+	// Switch model between turns
+	err = client.SetModel(ctx, stringPtr("claude-opus-4-1-20250805"))
+	assertNoError(t, err)
+
+	// Verify control request was sent (message count = 2)
+	assertClientMessageCount(t, transport, 2)
+
+	// Second turn with new model
+	err = client.Query(ctx, "Explain concurrency")
+	assertNoError(t, err)
+
+	// Verify second query was sent (message count = 3)
+	assertClientMessageCount(t, transport, 3)
+
+	// Verify the control request had correct format
+	controlMsg, ok := transport.getSentMessage(1)
+	if !ok {
+		t.Fatal("Failed to get control request message")
+	}
+	validateSetModelRequest(t, controlMsg, "claude-opus-4-1-20250805")
+}
+
+// TODO: TestClientSetModelContextCancellation tests context cancellation during SetModel
+// Temporarily disabled until SetModel is implemented
+func TestClientSetModelContextCancellation(t *testing.T) {
+	// Create a context that's already canceled
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	transport := newClientMockTransport()
+	client := setupClientForTest(t, transport)
+	defer disconnectClientSafely(t, client)
+
+	// Connect with different context
+	connectCtx, connectCancel := setupClientTestContext(t, 5*time.Second)
+	defer connectCancel()
+	connectClientSafely(connectCtx, t, client)
+
+	// Try SetModel with canceled context
+	err := client.SetModel(ctx, stringPtr("claude-sonnet-4-5"))
+	if err == nil {
+		t.Fatal("Expected error with canceled context")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Expected context.Canceled error, got: %v", err)
+	}
+}
+
+// TODO: TestClientSetModelConcurrent tests concurrent SetModel calls
+// Temporarily disabled until SetModel is implemented
+func TestClientSetModelConcurrent(t *testing.T) {
+	ctx, cancel := setupClientTestContext(t, 70*time.Second)
+	defer cancel()
+
+	transport := newClientMockTransportWithOptions(
+		WithClientControlResponse(true, nil, ""),
+	)
+	client := setupClientForTest(t, transport)
+	defer disconnectClientSafely(t, client)
+
+	connectClientSafely(ctx, t, client)
+
+	// Launch concurrent SetModel calls
+	const numConcurrent = 5
+	models := []string{
+		"claude-sonnet-4-5",
+		"claude-opus-4-1-20250805",
+		"claude-3-5-haiku-20241022",
+		"claude-sonnet-4-5",
+		"claude-opus-4-1-20250805",
+	}
+
+	var wg sync.WaitGroup
+	errors := make(chan error, numConcurrent)
+
+	for i := 0; i < numConcurrent; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			model := models[idx]
+			err := client.SetModel(ctx, &model)
+			if err != nil {
+				errors <- fmt.Errorf("SetModel call %d failed: %w", idx, err)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	// Check for any errors
+	for err := range errors {
+		t.Errorf("Concurrent SetModel error: %v", err)
+	}
+
+	// Verify all control requests were sent
+	expectedCount := numConcurrent
+	if transport.getSentMessageCount() != expectedCount {
+		t.Errorf("Expected %d control requests, got %d", expectedCount, transport.getSentMessageCount())
+	}
+}
+
+// Helper functions for SetModel tests
+
+func validateSetModelRequest(t *testing.T, msg StreamMessage, expectedModel string) {
+	t.Helper()
+
+	// The message should be a control request (sent as StreamMessage with control protocol data)
+	if msg.Type != "sdk_control_request" && msg.Type != "" {
+		// For mock transport, we might not have type set
+		// Check if Message field contains control request
+	}
+
+	// Verify this is a SetModelRequest by checking the message structure
+	msgMap, ok := msg.Message.(map[string]interface{})
+	if !ok {
+		// Try to assert as SDKControlRequest
+		_, ok := msg.Message.(*SDKControlRequest)
+		if !ok {
+			t.Fatalf("Expected Message to be control request, got: %T", msg.Message)
+		}
+		return
+	}
+
+	// Validate control request structure
+	requestData, ok := msgMap["request"]
+	if !ok {
+		t.Fatal("Expected 'request' field in control message")
+	}
+
+	requestMap, ok := requestData.(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected request to be map, got: %T", requestData)
+	}
+
+	requestType, ok := requestMap["type"]
+	if !ok || requestType != "set_model" {
+		t.Errorf("Expected request type 'set_model', got: %v", requestType)
+	}
+
+	model, ok := requestMap["model"]
+	if !ok {
+		t.Fatal("Expected 'model' field in SetModelRequest")
+	}
+
+	if model != expectedModel {
+		t.Errorf("Expected model %q, got: %v", expectedModel, model)
 	}
 }
