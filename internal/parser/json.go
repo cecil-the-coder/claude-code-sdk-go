@@ -82,6 +82,10 @@ func (p *Parser) ParseMessage(data map[string]any) (shared.Message, error) {
 		return p.parseSystemMessage(data)
 	case shared.MessageTypeResult:
 		return p.parseResultMessage(data)
+	case shared.MessageTypeSDKControlRequest:
+		return p.parseSDKControlRequest(data)
+	case shared.MessageTypeSDKControlResponse:
+		return p.parseSDKControlResponse(data)
 	default:
 		return nil, shared.NewMessageParseError(
 			fmt.Sprintf("unknown message type: %s", msgType),
@@ -167,7 +171,7 @@ func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, err
 	case string:
 		// String content - create directly
 		return &shared.UserMessage{
-			Content:        c,
+			Content:         c,
 			ParentToolUseID: parentToolUseID,
 		}, nil
 	case []any:
@@ -203,7 +207,7 @@ func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, err
 			blocks[i] = block
 		}
 		return &shared.UserMessage{
-			Content:        blocks,
+			Content:         blocks,
 			ParentToolUseID: parentToolUseID,
 		}, nil
 	default:
@@ -421,6 +425,44 @@ func (p *Parser) parseToolResultBlock(data map[string]any) (shared.ContentBlock,
 		Content:         data["content"],
 		IsError:         isError,
 	}, nil
+}
+
+// parseSDKControlRequest parses a control request message from the CLI.
+func (p *Parser) parseSDKControlRequest(data map[string]any) (*shared.SDKControlRequest, error) {
+	// Use JSON marshaling/unmarshaling to leverage existing UnmarshalJSON implementation
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return nil, shared.NewMessageParseError("failed to marshal SDK control request", data)
+	}
+
+	var req shared.SDKControlRequest
+	if err := json.Unmarshal(jsonData, &req); err != nil {
+		return nil, shared.NewMessageParseError(
+			fmt.Sprintf("failed to unmarshal SDK control request: %v", err),
+			data,
+		)
+	}
+
+	return &req, nil
+}
+
+// parseSDKControlResponse parses a control response message from the CLI.
+func (p *Parser) parseSDKControlResponse(data map[string]any) (*shared.SDKControlResponse, error) {
+	// Use JSON marshaling/unmarshaling to leverage existing UnmarshalJSON implementation
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return nil, shared.NewMessageParseError("failed to marshal SDK control response", data)
+	}
+
+	var resp shared.SDKControlResponse
+	if err := json.Unmarshal(jsonData, &resp); err != nil {
+		return nil, shared.NewMessageParseError(
+			fmt.Sprintf("failed to unmarshal SDK control response: %v", err),
+			data,
+		)
+	}
+
+	return &resp, nil
 }
 
 // ParseMessages is a convenience function to parse multiple JSON lines.

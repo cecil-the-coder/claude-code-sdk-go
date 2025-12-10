@@ -1075,6 +1075,14 @@ func (m *mockClientForQueue) Interrupt(ctx context.Context) error {
 	return nil
 }
 
+func (m *mockClientForQueue) SetPermissionMode(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockClientForQueue) SetModel(_ context.Context, _ *string) error {
+	return nil
+}
+
 func (m *mockClientForQueue) GetStreamIssues() []StreamIssue {
 	return nil
 }

@@ -905,3 +905,102 @@ func assertBufferOverflowError(t *testing.T, err error) {
 		t.Errorf("Expected buffer overflow error, got %q", jsonDecodeErr.Error())
 	}
 }
+
+// TestParseControlProtocolMessages tests parsing of control protocol messages
+func TestParseControlProtocolMessages(t *testing.T) {
+	tests := []struct {
+		name     string
+		jsonLine string
+		validate func(*testing.T, shared.Message)
+	}{
+		{
+			name:     "sdk_control_request_initialize",
+			jsonLine: `{"type":"sdk_control_request","request_id":"req_1_abc123de","request":{"type":"initialize","hooks":["can_use_tool"],"callbacks":[{"id":"cb1","name":"test"}]}}`,
+			validate: func(t *testing.T, msg shared.Message) {
+				t.Helper()
+				req, ok := msg.(*shared.SDKControlRequest)
+				if !ok {
+					t.Fatalf("expected *SDKControlRequest, got %T", msg)
+				}
+				if req.RequestID != "req_1_abc123de" {
+					t.Errorf("RequestID = %s, want req_1_abc123de", req.RequestID)
+				}
+				initReq, ok := req.Request.(*shared.InitializeRequest)
+				if !ok {
+					t.Fatalf("expected *InitializeRequest, got %T", req.Request)
+				}
+				if len(initReq.Hooks) != 1 || initReq.Hooks[0] != "can_use_tool" {
+					t.Errorf("hooks incorrect")
+				}
+			},
+		},
+		{
+			name:     "sdk_control_request_can_use_tool",
+			jsonLine: `{"type":"sdk_control_request","request_id":"req_2_def456gh","request":{"type":"can_use_tool","tool_name":"Read","input":{"file_path":"/test.txt"}}}`,
+			validate: func(t *testing.T, msg shared.Message) {
+				t.Helper()
+				req, ok := msg.(*shared.SDKControlRequest)
+				if !ok {
+					t.Fatalf("expected *SDKControlRequest, got %T", msg)
+				}
+				canUseReq, ok := req.Request.(*shared.CanUseToolRequest)
+				if !ok {
+					t.Fatalf("expected *CanUseToolRequest, got %T", req.Request)
+				}
+				if canUseReq.ToolName != "Read" {
+					t.Errorf("ToolName = %s, want Read", canUseReq.ToolName)
+				}
+			},
+		},
+		{
+			name:     "sdk_control_response_success",
+			jsonLine: `{"type":"sdk_control_response","request_id":"req_1_abc123de","response":{"success":true,"result":{"allowed":true}}}`,
+			validate: func(t *testing.T, msg shared.Message) {
+				t.Helper()
+				resp, ok := msg.(*shared.SDKControlResponse)
+				if !ok {
+					t.Fatalf("expected *SDKControlResponse, got %T", msg)
+				}
+				if resp.RequestID != "req_1_abc123de" {
+					t.Errorf("RequestID = %s, want req_1_abc123de", resp.RequestID)
+				}
+				if !resp.Response.Success {
+					t.Error("expected success response")
+				}
+			},
+		},
+		{
+			name:     "sdk_control_response_error",
+			jsonLine: `{"type":"sdk_control_response","request_id":"req_2_def456gh","response":{"success":false,"error":"permission denied"}}`,
+			validate: func(t *testing.T, msg shared.Message) {
+				t.Helper()
+				resp, ok := msg.(*shared.SDKControlResponse)
+				if !ok {
+					t.Fatalf("expected *SDKControlResponse, got %T", msg)
+				}
+				if resp.Response.Success {
+					t.Error("expected error response")
+				}
+				if resp.Response.Error != "permission denied" {
+					t.Errorf("Error = %s, want permission denied", resp.Response.Error)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := New()
+			messages, err := parser.ProcessLine(tt.jsonLine)
+			if err != nil {
+				t.Fatalf("ProcessLine error: %v", err)
+			}
+
+			if len(messages) != 1 {
+				t.Fatalf("expected 1 message, got %d", len(messages))
+			}
+
+			tt.validate(t, messages[0])
+		})
+	}
+}

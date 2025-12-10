@@ -46,7 +46,7 @@ func (m *UserMessage) Type() string {
 func (m *UserMessage) MarshalJSON() ([]byte, error) {
 	type userMessage UserMessage
 	temp := struct {
-		Type           string `json:"type"`
+		Type string `json:"type"`
 		*userMessage
 	}{
 		Type:        MessageTypeUser,
