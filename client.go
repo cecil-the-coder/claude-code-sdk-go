@@ -24,6 +24,15 @@ type Client interface {
 	Interrupt(ctx context.Context) error
 	GetStreamIssues() []StreamIssue
 	GetStreamStats() StreamStats
+
+	// Control protocol methods for runtime configuration
+	SetPermissionMode(ctx context.Context, mode PermissionMode) error
+	SetModel(ctx context.Context, model string) error
+	RewindFiles(ctx context.Context, userMessageID string) error
+
+	// Permission and control support queries
+	HasPermissionSupport() bool
+	HasControlSupport() bool
 }
 
 // ClientImpl implements the Client interface.
@@ -35,6 +44,11 @@ type ClientImpl struct {
 	connected       bool
 	msgChan         <-chan Message
 	errChan         <-chan error
+
+	// Control protocol integration
+	controlProtocol    ControlProtocol
+	permissionManager  PermissionManager
+	hookSystem         HookSystem
 }
 
 // NewClient creates a new Client with the given options.
@@ -44,6 +58,22 @@ func NewClient(opts ...Option) Client {
 		options: options,
 	}
 	return client
+}
+
+// initControlSystems initializes the control systems after transport is available
+func (c *ClientImpl) initControlSystems() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.controlProtocol == nil && c.transport != nil {
+		c.controlProtocol = NewControlProtocol(c.transport)
+	}
+	if c.permissionManager == nil {
+		c.permissionManager = NewPermissionManager()
+	}
+	if c.hookSystem == nil {
+		c.hookSystem = NewHookSystem()
+	}
 }
 
 // NewClientWithTransport creates a new Client with a custom transport (for testing).
@@ -238,6 +268,9 @@ func (c *ClientImpl) Connect(ctx context.Context, _ ...StreamMessage) error {
 
 	// Get message channels
 	c.msgChan, c.errChan = c.transport.ReceiveMessages(ctx)
+
+	// Initialize control systems after transport is ready
+	c.initControlSystems()
 
 	c.connected = true
 	return nil
@@ -487,4 +520,117 @@ func (c *ClientImpl) GetStreamStats() StreamStats {
 	}
 
 	return validator.GetStats()
+}
+
+// SetPermissionMode changes permission mode during conversation
+func (c *ClientImpl) SetPermissionMode(ctx context.Context, mode PermissionMode) error {
+	c.mu.RLock()
+	controlProtocol := c.controlProtocol
+	c.mu.RUnlock()
+
+	if controlProtocol == nil {
+		return fmt.Errorf("control protocol not available")
+	}
+
+	req := &ControlRequest{
+		Subtype: ControlRequestTypeSetPermissionMode,
+		Data: map[string]any{
+			"mode": string(mode),
+		},
+	}
+
+	_, err := controlProtocol.SendRequest(ctx, req)
+	return err
+}
+
+// SetModel changes the AI model during conversation
+func (c *ClientImpl) SetModel(ctx context.Context, model string) error {
+	c.mu.RLock()
+	controlProtocol := c.controlProtocol
+	c.mu.RUnlock()
+
+	if controlProtocol == nil {
+		return fmt.Errorf("control protocol not available")
+	}
+
+	req := &ControlRequest{
+		Subtype: ControlRequestTypeSetModel,
+		Data: map[string]any{
+			"model": model,
+		},
+	}
+
+	_, err := controlProtocol.SendRequest(ctx, req)
+	return err
+}
+
+// RewindFiles restores files to a previous checkpoint
+func (c *ClientImpl) RewindFiles(ctx context.Context, userMessageID string) error {
+	c.mu.RLock()
+	controlProtocol := c.controlProtocol
+	c.mu.RUnlock()
+
+	if controlProtocol == nil {
+		return fmt.Errorf("control protocol not available")
+	}
+
+	req := &ControlRequest{
+		Subtype: ControlRequestTypeRewindFiles,
+		Data: map[string]any{
+			"user_message_id": userMessageID,
+		},
+	}
+
+	_, err := controlProtocol.SendRequest(ctx, req)
+	return err
+}
+
+// HasPermissionSupport returns true if permission callbacks are supported
+func (c *ClientImpl) HasPermissionSupport() bool {
+	c.mu.RLock()
+	controlProtocol := c.controlProtocol
+	c.mu.RUnlock()
+
+	if controlProtocol == nil {
+		return false
+	}
+
+	return controlProtocol.HasPermissionSupport()
+}
+
+// HasControlSupport returns true if control protocol is enabled
+func (c *ClientImpl) HasControlSupport() bool {
+	c.mu.RLock()
+	controlProtocol := c.controlProtocol
+	c.mu.RUnlock()
+
+	if controlProtocol == nil {
+		return false
+	}
+
+	return controlProtocol.HasControlSupport()
+}
+
+// GetPermissionManager returns the permission manager for advanced usage
+func (c *ClientImpl) GetPermissionManager() PermissionManager {
+	c.mu.RLock()
+	pm := c.permissionManager
+	c.mu.RUnlock()
+	return pm
+}
+
+// GetHookSystem returns the hook system for advanced usage
+func (c *ClientImpl) GetHookSystem() HookSystem {
+	c.mu.RLock()
+	hs := c.hookSystem
+	c.mu.RUnlock()
+	return hs
+}
+
+// GetControlProtocol returns the control protocol for advanced usage
+func (c *ClientImpl) GetControlProtocol() ControlProtocol {
+	c.mu.RLock()
+	cp := c.controlProtocol
+	c.mu.RUnlock()
+	return cp
 }
