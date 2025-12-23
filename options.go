@@ -391,6 +391,14 @@ func WithAgent(name string, agent AgentDefinition) Option {
 	}
 }
 
+// WithHooks sets the hook system configuration.
+// This replaces any existing hooks configuration.
+func WithHooks(hooks map[HookEventName]*HookMatcher) Option {
+	return func(o *Options) {
+		o.Hooks = hooks
+	}
+}
+
 const customTransportMarker = "custom_transport"
 
 // WithTransport sets a custom transport for testing.

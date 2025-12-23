@@ -104,3 +104,46 @@ type Transport interface {
 	Close() error
 	GetValidator() *StreamValidator
 }
+
+// Hook System Types
+
+// HookEventName represents the type of hook event.
+type HookEventName = shared.HookEventName
+
+// HookCallback is the function signature for hook callbacks.
+type HookCallback = shared.HookCallback
+
+// HookMatcher defines pattern matching and callbacks for a hook event.
+type HookMatcher = shared.HookMatcher
+
+// HookInput represents the input data for hook callbacks.
+type HookInput = shared.HookInput
+
+// HookContext provides additional context to hook callbacks.
+type HookContext = shared.HookContext
+
+// HookRegistry manages hook registration and callback invocation.
+type HookRegistry = shared.HookRegistry
+
+// HookSystem defines the interface for hook management.
+type HookSystem = shared.HookSystem
+
+// Re-export HookEventName constants
+const (
+	HookEventPreToolUse       = shared.HookEventPreToolUse
+	HookEventPostToolUse      = shared.HookEventPostToolUse
+	HookEventUserPromptSubmit = shared.HookEventUserPromptSubmit
+	HookEventStop             = shared.HookEventStop
+	HookEventSubagentStop     = shared.HookEventSubagentStop
+	HookEventPreCompact       = shared.HookEventPreCompact
+)
+
+// Re-export hook system constants
+const (
+	DefaultHookTimeout = shared.DefaultHookTimeout
+)
+
+// NewHookSystem creates a new HookRegistry instance.
+func NewHookSystem() HookSystem {
+	return shared.NewHookSystem()
+}

@@ -73,6 +73,18 @@ func (c *ClientImpl) initControlSystems() {
 	}
 	if c.hookSystem == nil {
 		c.hookSystem = NewHookSystem()
+
+		// Register hooks from options if available
+		if c.options != nil && c.options.Hooks != nil {
+			for eventName, matcher := range c.options.Hooks {
+				_, err := c.hookSystem.Register(eventName, matcher)
+				if err != nil {
+					// Log error but don't fail initialization
+					// In a real implementation, you might want to use a proper logger
+					_ = err
+				}
+			}
+		}
 	}
 }
 

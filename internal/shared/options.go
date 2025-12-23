@@ -185,6 +185,9 @@ type Options struct {
 	// Agent Definitions
 	Agents map[string]AgentDefinition `json:"agents,omitempty"`
 
+	// Hook System Configuration
+	Hooks map[HookEventName]*HookMatcher `json:"hooks,omitempty"`
+
 	// File System & Context
 	Cwd     *string  `json:"cwd,omitempty"`
 	AddDirs []string `json:"add_dirs,omitempty"`
