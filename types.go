@@ -104,3 +104,10 @@ type Transport interface {
 	Close() error
 	GetValidator() *StreamValidator
 }
+
+// ControlRequestTransport extends Transport with control protocol support.
+type ControlRequestTransport interface {
+	Transport
+	SendControlRequest(ctx context.Context, req *ControlRequest) error
+	SupportsControlRequests() bool
+}
