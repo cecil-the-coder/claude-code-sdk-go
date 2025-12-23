@@ -51,7 +51,7 @@ func TestHookCallback(t *testing.T) {
 	input := HookInput{
 		HookEventName: HookEventPreToolUse,
 		SessionID:     "test-session",
-		ToolName:      strPtr("Bash"),
+		ToolName:      hookStrPtr("Bash"),
 		ToolInput:     map[string]any{"command": "ls"},
 	}
 	toolUseID := "tool-123"
@@ -74,7 +74,7 @@ func TestHookCallback(t *testing.T) {
 func TestHookMatcher(t *testing.T) {
 	t.Run("basic_matcher", func(t *testing.T) {
 		matcher := &HookMatcher{
-			Matcher: strPtr("Bash"),
+			Matcher: hookStrPtr("Bash"),
 			Hooks:   []HookCallback{},
 		}
 
@@ -92,7 +92,7 @@ func TestHookMatcher(t *testing.T) {
 	t.Run("matcher_with_timeout", func(t *testing.T) {
 		timeout := 30.0
 		matcher := &HookMatcher{
-			Matcher: strPtr("Edit|Write"),
+			Matcher: hookStrPtr("Edit|Write"),
 			Hooks:   []HookCallback{},
 			Timeout: &timeout,
 		}
@@ -120,10 +120,10 @@ func TestHookInputPreToolUse(t *testing.T) {
 	input := HookInput{
 		HookEventName:  HookEventPreToolUse,
 		SessionID:      "session-123",
-		TranscriptPath: strPtr("/path/to/transcript"),
-		Cwd:            strPtr("/working/dir"),
-		PermissionMode: strPtr("default"),
-		ToolName:       strPtr("Bash"),
+		TranscriptPath: hookStrPtr("/path/to/transcript"),
+		Cwd:            hookStrPtr("/working/dir"),
+		PermissionMode: hookStrPtr("default"),
+		ToolName:       hookStrPtr("Bash"),
 		ToolInput:      map[string]any{"command": "ls -la"},
 	}
 
@@ -150,9 +150,9 @@ func TestHookInputPostToolUse(t *testing.T) {
 	input := HookInput{
 		HookEventName: HookEventPostToolUse,
 		SessionID:     "session-123",
-		ToolName:      strPtr("Bash"),
+		ToolName:      hookStrPtr("Bash"),
 		ToolInput:     map[string]any{"command": "ls"},
-		ToolResponse:  strPtr("file1.txt\nfile2.txt"),
+		ToolResponse:  hookStrPtr("file1.txt\nfile2.txt"),
 	}
 
 	if input.HookEventName != HookEventPostToolUse {
@@ -168,7 +168,7 @@ func TestHookInputUserPromptSubmit(t *testing.T) {
 	input := HookInput{
 		HookEventName: HookEventUserPromptSubmit,
 		SessionID:     "session-123",
-		Prompt:        strPtr("Help me fix this bug"),
+		Prompt:        hookStrPtr("Help me fix this bug"),
 	}
 
 	if input.HookEventName != HookEventUserPromptSubmit {
@@ -184,7 +184,7 @@ func TestHookInputStop(t *testing.T) {
 	input := HookInput{
 		HookEventName:  HookEventStop,
 		SessionID:      "session-123",
-		StopHookActive: boolPtr(true),
+		StopHookActive: hookBoolPtr(true),
 	}
 
 	if input.HookEventName != HookEventStop {
@@ -200,7 +200,7 @@ func TestHookInputSubagentStop(t *testing.T) {
 	input := HookInput{
 		HookEventName:  HookEventSubagentStop,
 		SessionID:      "session-123",
-		StopHookActive: boolPtr(false),
+		StopHookActive: hookBoolPtr(false),
 	}
 
 	if input.HookEventName != HookEventSubagentStop {
@@ -216,8 +216,8 @@ func TestHookInputPreCompact(t *testing.T) {
 	input := HookInput{
 		HookEventName:      HookEventPreCompact,
 		SessionID:          "session-123",
-		Trigger:            strPtr("max_turns"),
-		CustomInstructions: strPtr("Keep important context"),
+		Trigger:            hookStrPtr("max_turns"),
+		CustomInstructions: hookStrPtr("Keep important context"),
 	}
 
 	if input.HookEventName != HookEventPreCompact {
@@ -342,14 +342,14 @@ func TestHookPatternMatching(t *testing.T) {
 		toolName    string
 		shouldMatch bool
 	}{
-		{"exact_match", strPtr("Bash"), "Bash", true},
-		{"no_match", strPtr("Bash"), "Edit", false},
-		{"pipe_pattern", strPtr("Bash|Edit"), "Bash", true},
-		{"pipe_pattern_second", strPtr("Bash|Edit"), "Edit", true},
-		{"pipe_no_match", strPtr("Bash|Edit"), "Write", false},
+		{"exact_match", hookStrPtr("Bash"), "Bash", true},
+		{"no_match", hookStrPtr("Bash"), "Edit", false},
+		{"pipe_pattern", hookStrPtr("Bash|Edit"), "Bash", true},
+		{"pipe_pattern_second", hookStrPtr("Bash|Edit"), "Edit", true},
+		{"pipe_no_match", hookStrPtr("Bash|Edit"), "Write", false},
 		{"nil_pattern_matches_all", nil, "AnyTool", true},
-		{"regex_pattern", strPtr("^(Bash|Edit|Write)$"), "Bash", true},
-		{"regex_no_match", strPtr("^(Bash|Edit)$"), "Write", false},
+		{"regex_pattern", hookStrPtr("^(Bash|Edit|Write)$"), "Bash", true},
+		{"regex_no_match", hookStrPtr("^(Bash|Edit)$"), "Write", false},
 	}
 
 	for _, tt := range tests {
@@ -375,7 +375,7 @@ func TestHookRegistration(t *testing.T) {
 	}
 
 	matcher := &HookMatcher{
-		Matcher: strPtr("Bash"),
+		Matcher: hookStrPtr("Bash"),
 		Hooks:   []HookCallback{callback1, callback2},
 	}
 
@@ -416,7 +416,7 @@ func TestHookRegistryInvoke(t *testing.T) {
 	}
 
 	matcher := &HookMatcher{
-		Matcher: strPtr("Bash"),
+		Matcher: hookStrPtr("Bash"),
 		Hooks:   []HookCallback{callback},
 	}
 
@@ -430,7 +430,7 @@ func TestHookRegistryInvoke(t *testing.T) {
 	input := HookInput{
 		HookEventName: HookEventPreToolUse,
 		SessionID:     "test-session",
-		ToolName:      strPtr("Bash"),
+		ToolName:      hookStrPtr("Bash"),
 		ToolInput:     map[string]any{"command": "ls"},
 	}
 	toolUseID := "tool-123"
@@ -460,7 +460,7 @@ func TestHookInputJSONMarshaling(t *testing.T) {
 			input: HookInput{
 				HookEventName: HookEventPreToolUse,
 				SessionID:     "session-123",
-				ToolName:      strPtr("Bash"),
+				ToolName:      hookStrPtr("Bash"),
 				ToolInput:     map[string]any{"command": "ls"},
 			},
 		},
@@ -469,9 +469,9 @@ func TestHookInputJSONMarshaling(t *testing.T) {
 			input: HookInput{
 				HookEventName: HookEventPostToolUse,
 				SessionID:     "session-123",
-				ToolName:      strPtr("Edit"),
+				ToolName:      hookStrPtr("Edit"),
 				ToolInput:     map[string]any{"file": "test.go"},
-				ToolResponse:  strPtr("File edited successfully"),
+				ToolResponse:  hookStrPtr("File edited successfully"),
 			},
 		},
 		{
@@ -479,7 +479,7 @@ func TestHookInputJSONMarshaling(t *testing.T) {
 			input: HookInput{
 				HookEventName: HookEventUserPromptSubmit,
 				SessionID:     "session-123",
-				Prompt:        strPtr("Help me debug this"),
+				Prompt:        hookStrPtr("Help me debug this"),
 			},
 		},
 		{
@@ -487,7 +487,7 @@ func TestHookInputJSONMarshaling(t *testing.T) {
 			input: HookInput{
 				HookEventName:  HookEventStop,
 				SessionID:      "session-123",
-				StopHookActive: boolPtr(true),
+				StopHookActive: hookBoolPtr(true),
 			},
 		},
 		{
@@ -495,7 +495,7 @@ func TestHookInputJSONMarshaling(t *testing.T) {
 			input: HookInput{
 				HookEventName: HookEventPreCompact,
 				SessionID:     "session-123",
-				Trigger:       strPtr("max_turns"),
+				Trigger:       hookStrPtr("max_turns"),
 			},
 		},
 	}
@@ -530,11 +530,11 @@ func TestHookInputJSONMarshaling(t *testing.T) {
 }
 
 // Helper functions for test file
-func strPtr(s string) *string {
+func hookStrPtr(s string) *string {
 	return &s
 }
 
-func boolPtr(b bool) *bool {
+func hookBoolPtr(b bool) *bool {
 	return &b
 }
 
