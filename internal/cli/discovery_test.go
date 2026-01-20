@@ -390,8 +390,8 @@ func validateStreamingCommand(t *testing.T, cmd []string) {
 
 func validateFullOptionsCommand(t *testing.T, cmd []string) {
 	t.Helper()
-	assertContainsArgs(t, cmd, "--allowed-tools", "Read,Write")
-	assertContainsArgs(t, cmd, "--disallowed-tools", "Bash,Delete")
+	assertContainsArgs(t, cmd, "--allowedTools", "Read,Write")
+	assertContainsArgs(t, cmd, "--disallowedTools", "Bash,Delete")
 	assertContainsArgs(t, cmd, "--system-prompt", "You are a helpful assistant")
 	assertContainsArgs(t, cmd, "--model", "claude-3-sonnet")
 	assertContainsArg(t, cmd, "--continue")
@@ -1043,7 +1043,7 @@ func TestPluginsWithOtherFlags(t *testing.T) {
 
 	// Verify other flags are also present
 	assertContainsArgs(t, cmd, "--betas", "context-1m-2025-08-07")
-	assertContainsArgs(t, cmd, "--allowed-tools", "Read,Write")
+	assertContainsArgs(t, cmd, "--allowedTools", "Read,Write")
 }
 
 // TestPluginsOrderPreserved tests that plugin order is preserved in CLI flags

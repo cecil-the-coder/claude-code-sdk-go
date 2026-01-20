@@ -163,10 +163,10 @@ func addOptionsToCommand(cmd []string, options *shared.Options) []string {
 
 func addToolControlFlags(cmd []string, options *shared.Options) []string {
 	if len(options.AllowedTools) > 0 {
-		cmd = append(cmd, "--allowed-tools", strings.Join(options.AllowedTools, ","))
+		cmd = append(cmd, "--allowedTools", strings.Join(options.AllowedTools, ","))
 	}
 	if len(options.DisallowedTools) > 0 {
-		cmd = append(cmd, "--disallowed-tools", strings.Join(options.DisallowedTools, ","))
+		cmd = append(cmd, "--disallowedTools", strings.Join(options.DisallowedTools, ","))
 	}
 	return cmd
 }
